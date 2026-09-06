@@ -207,5 +207,65 @@ class FindTranscriptTests(unittest.TestCase):
                 )
 
 
+class VerbatimPromptTests(unittest.TestCase):
+    """Whisper cleans speech up unless the decoder is primed for disfluency.
+
+    SKILL.md Hard Rule 8 wants fillers: they are the editorial signal for
+    retakes and hesitation, and removing them leaves unexplained holes in the
+    timeline that the cut planner cannot account for.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.wav = silent_wav(Path(self.tmp.name) / "a.wav")
+        self.seen = {}
+
+        def fake_transcribe(*a, **k):
+            self.seen.update(k)
+            return {"language": "en", "text": "", "segments": []}
+
+        sys.modules["mlx_whisper"] = SimpleNamespace(transcribe=fake_transcribe)
+        self.addCleanup(lambda: sys.modules.pop("mlx_whisper", None))
+
+    def run_it(self, **kw):
+        engines.transcribe_audio("mlx-whisper", self.wav, **kw)
+        return self.seen["initial_prompt"]
+
+    def test_primes_for_disfluencies_when_the_language_is_known(self):
+        self.assertEqual(self.run_it(language="en"), engines.VERBATIM_PROMPTS["en"])
+
+    def test_the_primer_is_in_the_audios_language(self):
+        # An English primer on Mandarin rewrote numerals (10 -> 十) and garbled
+        # words, so each language gets its own or none at all.
+        self.assertEqual(self.run_it(language="zh"), engines.VERBATIM_PROMPTS["zh"])
+        self.assertNotEqual(engines.VERBATIM_PROMPTS["zh"], engines.VERBATIM_PROMPTS["en"])
+
+    def test_unknown_language_is_left_unprimed(self):
+        # Whisper detects during decoding; without --language we cannot pick a
+        # primer, and guessing English would damage every other language.
+        self.assertIsNone(self.run_it())
+        self.assertIsNone(self.run_it(language="ja"))
+
+    def test_an_explicit_prompt_wins(self):
+        self.assertEqual(self.run_it(initial_prompt="Acme Corp."), "Acme Corp.")
+
+    def test_empty_prompt_restores_whispers_own_behavior(self):
+        self.assertIsNone(self.run_it(initial_prompt=""))
+
+    def test_hotwords_ride_on_the_same_prompt(self):
+        p = self.run_it(language="en", hotwords=["Xugan Chen", "NBER"])
+        self.assertIn("uh", p)              # priming survives
+        self.assertIn("Xugan Chen, NBER", p)
+        self.assertTrue(p.endswith("."))
+
+    def test_hotwords_alone_when_priming_is_off(self):
+        self.assertEqual(self.run_it(initial_prompt="", hotwords=["NBER"]), "NBER.")
+
+    def test_word_timestamps_are_never_negotiable(self):
+        self.run_it(language="en")
+        self.assertTrue(self.seen["word_timestamps"])
+
+
 if __name__ == "__main__":
     unittest.main()
