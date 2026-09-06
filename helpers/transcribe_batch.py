@@ -20,6 +20,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import engines
 from transcribe import load_api_key, transcribe_one, transcript_path
 
 
@@ -43,7 +44,26 @@ def main() -> None:
         default=None,
         help="Edit output directory (default: <videos_dir>/edit)",
     )
-    ap.add_argument("--workers", type=int, default=4, help="Parallel workers (default: 4)")
+    ap.add_argument(
+        "--engine",
+        choices=engines.ENGINES,
+        default=engines.DEFAULT_ENGINE,
+        help="Transcription engine (default: %s)." % engines.DEFAULT_ENGINE,
+    )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel workers. Default 4 for the hosted engine (network-bound) "
+             "and 1 for local engines, where each worker would load its own copy "
+             "of the model onto the same GPU.",
+    )
+    ap.add_argument(
+        "--hotwords",
+        type=str,
+        default=None,
+        help="Comma-separated names or domain terms to bias recognition toward.",
+    )
     ap.add_argument(
         "--language",
         type=str,
@@ -75,8 +95,11 @@ def main() -> None:
     if not videos:
         sys.exit(f"no videos found in {videos_dir}")
 
+    workers = args.workers if args.workers else (4 if args.engine == "elevenlabs" else 1)
+    hotwords = [h.strip() for h in args.hotwords.split(",") if h.strip()] if args.hotwords else None
+
     already_cached = [v for v in videos
-                      if transcript_path(edit_dir, v, args.audio_track).exists()]
+                      if transcript_path(edit_dir, v, args.audio_track, args.engine).exists()]
     pending = [v for v in videos if v not in already_cached]
 
     print(f"found {len(videos)} videos ({len(already_cached)} cached, {len(pending)} to transcribe)")
@@ -84,13 +107,13 @@ def main() -> None:
         print("nothing to do")
         return
 
-    api_key = load_api_key()
+    api_key = load_api_key() if engines.needs_api_key(args.engine) else None
 
-    print(f"transcribing {len(pending)} files with {args.workers} parallel workers")
+    print(f"transcribing {len(pending)} files with {args.engine}, {workers} worker(s)")
     t0 = time.time()
 
     errors: list[tuple[Path, str]] = []
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(
                 transcribe_one,
@@ -101,6 +124,8 @@ def main() -> None:
                 num_speakers=args.num_speakers,
                 verbose=False,
                 audio_track=args.audio_track,
+                engine=args.engine,
+                hotwords=hotwords,
             ): v
             for v in pending
         }
