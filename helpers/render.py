@@ -416,6 +416,57 @@ def _words_in_range(transcript: dict, t_start: float, t_end: float) -> list[dict
     return out
 
 
+# Han, kana, hangul, plus CJK punctuation (\u3000-\u303f) and the fullwidth
+# forms (\uff00-\uffef) — "，" and "。" must count as CJK or the joiner puts a
+# space after every Chinese comma.
+_CJK_RANGES = (
+    ("\u3000", "\u303f"), ("\u3040", "\u30ff"), ("\u4e00", "\u9fff"),
+    ("\uac00", "\ud7af"), ("\uff00", "\uffef"),
+)
+
+
+def _is_cjk(text: str) -> bool:
+    return any(lo <= c <= hi for c in text for lo, hi in _CJK_RANGES)
+
+
+def join_tokens(tokens: list[str]) -> str:
+    """Join caption tokens for display.
+
+    English needs the spaces. Chinese, Japanese and Korean do not use them, and
+    ASR emits one token per character, so a space-joined caption reads
+    "的 使 用 了" instead of "的使用了". Keep a space only where at least one
+    side is non-CJK, which preserves "AI 的公司" and "95% 的".
+    """
+    # ASR splits "95%" into "95" + "%"; never strand trailing punctuation.
+    no_space_before = set(",.!?;:%)]}'\"") | set("，。！？；：）】」》、")
+    out = ""
+    for tok in (t for t in tokens if t):
+        cjk_run = out and _is_cjk(out[-1]) and _is_cjk(tok[0])
+        if out and not cjk_run and tok[0] not in no_space_before:
+            out += " "
+        out += tok
+    return out
+
+
+def auto_chunk_words(words: list[dict]) -> int:
+    """Words per caption when the EDL does not say.
+
+    2 suits English. ASR tokenizes Chinese, Japanese and Korean per character,
+    so 2 there means a two-character caption — the burned-in result reads
+    "的 使" and is useless. Chunk far more of them per line.
+    """
+    sample = [(w.get("text") or "").strip() for w in words[:200]]
+    sample = [s for s in sample if s]
+    if not sample:
+        return 2
+    cjk = sum(1 for s in sample if _is_cjk(s))
+    if cjk < len(sample) * 0.5:
+        return 2
+    # Aim at roughly 10 CJK glyphs per caption, whatever the token size.
+    avg = max(1.0, sum(len(s) for s in sample) / len(sample))
+    return max(2, round(10 / avg))
+
+
 def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
     """Build an output-timeline SRT from per-source transcripts.
 
@@ -445,7 +496,8 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
         transcript = json.loads(tr_path.read_text())
         words_in_seg = _words_in_range(transcript, seg_start, seg_end)
 
-        # Group into 2-word chunks, break on punctuation
+        # Group into chunks, break on punctuation
+        chunk_size = auto_chunk_words(words_in_seg)
         chunks: list[list[dict]] = []
         current: list[dict] = []
         for w in words_in_seg:
@@ -453,9 +505,9 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
             if not text:
                 continue
             current.append(w)
-            # Break if the current text ends in punctuation or we hit 2 words
+            # Break if the current text ends in punctuation or we hit the chunk size
             ends_in_punct = bool(text) and text[-1] in PUNCT_BREAK
-            if len(current) >= 2 or ends_in_punct:
+            if len(current) >= chunk_size or ends_in_punct:
                 chunks.append(current)
                 current = []
         if current:
@@ -468,7 +520,7 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
             out_end = max(0.0, local_end - seg_start) + seg_offset
             if out_end <= out_start:
                 out_end = out_start + 0.4
-            text = " ".join((w.get("text") or "").strip() for w in chunk)
+            text = join_tokens([(w.get("text") or "").strip() for w in chunk])
             text = re.sub(r"\s+", " ", text).strip()
             # Strip trailing punctuation for cleaner uppercase look
             text = text.rstrip(",;:")
