@@ -31,6 +31,26 @@ ENGINES = ("mlx-whisper", "vibevoice", "elevenlabs")
 # Whisper large-v3, MLX-converted. Runs on the Apple Silicon GPU.
 MLX_WHISPER_MODEL = "mlx-community/whisper-large-v3-mlx"
 
+# Whisper is trained to clean speech up: it silently drops "uh", "um" and
+# stutters. SKILL.md Hard Rule 8 needs them - fillers are the editorial signal
+# for retakes and hesitation, and removing them leaves unexplained holes in the
+# timeline. A disfluency-primed initial_prompt is the only lever that brings
+# them back. Measured on videos/demo_en/nber.mp4 (298s, English): 0 fillers
+# without it, 31 with it, and it also suppressed a 50-word repetition loop the
+# unprimed run hallucinated in the last minute.
+#
+# The prompt MUST be in the audio's language. Measured on a Mandarin clip, the
+# English primer rewrote numerals (10 -> 十) and garbled words. Whisper detects
+# the language during decoding, so we cannot know it beforehand without either
+# a second 3GB model load or a throwaway decode pass; priming therefore only
+# happens when --language says what the audio is.
+# ponytail: single-pass by design. Add detection only if paying for it earns
+# its keep.
+VERBATIM_PROMPTS = {
+    "en": "Um, uh, so, you know, I mean, like, uh, it's, it's kind of, um, well.",
+    "zh": "嗯，呃，那个，就是说，然后，这个，对对对。",
+}
+
 
 def wav_duration(path: Path) -> float:
     with wave.open(str(path), "rb") as w:
@@ -46,6 +66,8 @@ def _mlx_whisper(
     audio: Path,
     language: str | None = None,
     model: str = MLX_WHISPER_MODEL,
+    initial_prompt: str | None = None,
+    hotwords: list[str] | None = None,
     **_: object,
 ) -> dict:
     try:
@@ -56,11 +78,24 @@ def _mlx_whisper(
             "(Apple Silicon only. On other hardware use --engine elevenlabs.)"
         ) from e
 
+    if initial_prompt is None:
+        prompt = VERBATIM_PROMPTS.get((language or "").lower()[:2], "")
+    else:
+        prompt = initial_prompt
+    if hotwords:
+        # No keyterms API locally; naming the terms in the prompt is the
+        # equivalent lever, and it rides on the same conditioning.
+        prompt = ", ".join(filter(None, [prompt.rstrip("."), ", ".join(hotwords)])) + "."
+
     result = mlx_whisper.transcribe(
         str(audio),
         path_or_hf_repo=model,
         word_timestamps=True,
         language=language,
+        # condition_on_previous_text defaults True, so the priming carries past
+        # the first 30s window. Filler density still fell over the NBER clip
+        # (14/7/6/3/1 per minute); that may be decay or a speaker settling in.
+        initial_prompt=prompt or None,
         verbose=None,
     )
 

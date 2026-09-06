@@ -65,6 +65,14 @@ def main() -> None:
         help="Comma-separated names or domain terms to bias recognition toward.",
     )
     ap.add_argument(
+        "--initial-prompt",
+        type=str,
+        default=None,
+        help="Override the decoder priming text (mlx-whisper only). With --language, "
+             "the default primes for disfluencies; empty string gives Whisper's "
+             "cleaned-up speech.",
+    )
+    ap.add_argument(
         "--language",
         type=str,
         default=None,
@@ -126,6 +134,7 @@ def main() -> None:
                 audio_track=args.audio_track,
                 engine=args.engine,
                 hotwords=hotwords,
+                initial_prompt=args.initial_prompt,
             ): v
             for v in pending
         }

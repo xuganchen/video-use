@@ -71,7 +71,7 @@ Helpers (`helpers/transcribe.py`, `helpers/render.py`, etc.) live alongside this
 
 ## Helpers
 
-- **`transcribe.py <video>`** — single file. `--engine mlx-whisper|vibevoice|elevenlabs` (default `mlx-whisper`), `--language`, `--num-speakers N`, `--hotwords "name,term"`. Cached per source **and** per engine.
+- **`transcribe.py <video>`** — single file. `--engine mlx-whisper|vibevoice|elevenlabs` (default `mlx-whisper`), `--language`, `--num-speakers N`, `--hotwords "name,term"`, `--initial-prompt`. Cached per source **and** per engine. **Always pass `--language` on mlx-whisper** — it is what enables verbatim filler priming (Hard Rule 8). Without it Whisper deletes every "uh" and stutter silently.
 - **`transcribe_batch.py <videos_dir>`** — parallel transcription. Defaults to 4 workers on `elevenlabs` (network-bound) and 1 on local engines, where each worker loads its own copy of the model onto the same GPU.
 - **`pack_transcripts.py --edit-dir <dir>`** — `transcripts/*.json` → `takes_packed.md` (phrase-level, break on silence ≥ 0.5s).
 - **`timeline_view.py <video> <start> <end>`** — filmstrip + waveform PNG. On-demand visual drill-down. **Not a scan tool** — use it at decision points, not constantly.
@@ -312,6 +312,7 @@ Things that consistently fail regardless of style:
 - **Whisper SRT / phrase-level output.** Loses sub-second gap data. Always word-level verbatim.
 - **Running Whisper on CPU.** Slow. `mlx-whisper` runs large-v3 on the Apple Silicon GPU; that is the default engine.
 - **Reaching for a paid API by reflex.** `mlx-whisper` is local, free and word-level. Choose `elevenlabs` when you need audio-event tags or diarization, not by default.
+- **Transcribing without `--language` on mlx-whisper.** Whisper is trained to tidy speech up. Measured on a 5-minute talk: 0 fillers unprimed, 31 with `--language en`, and priming also suppressed a 50-word repetition loop the unprimed run hallucinated. The primer must match the audio (an English one rewrote Mandarin numerals), so the language flag is what switches it on.
 - **Burning subtitles into base before compositing overlays.** Overlays hide them. (Hard Rule 1.)
 - **Single-pass filtergraph when you have overlays.** Double re-encodes. Use per-segment extract → concat.
 - **Linear animation easing.** Looks robotic. Always cubic.

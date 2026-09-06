@@ -22,6 +22,7 @@ Usage:
     python helpers/transcribe.py <video_path> --language en
     python helpers/transcribe.py <video_path> --num-speakers 2
     python helpers/transcribe.py <video_path> --hotwords "Xugan Chen,video-use"
+    python helpers/transcribe.py <video_path> --initial-prompt ""   # non-verbatim
 """
 
 from __future__ import annotations
@@ -169,6 +170,7 @@ def transcribe_one(
     audio_track: int = 0,
     engine: str = engines.DEFAULT_ENGINE,
     hotwords: list[str] | None = None,
+    initial_prompt: str | None = None,
 ) -> Path:
     """Transcribe a single video. Returns path to transcript JSON.
 
@@ -218,6 +220,7 @@ def transcribe_one(
             num_speakers=num_speakers,
             api_key=api_key,
             hotwords=hotwords,
+            initial_prompt=initial_prompt,
         )
 
     out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
@@ -257,7 +260,7 @@ def main() -> None:
         "--language",
         type=str,
         default=None,
-        help="Optional ISO language code (e.g., 'en'). Omit to auto-detect.",
+        help="Optional ISO language code (e.g., 'en'). Omit to auto-detect. On mlx-whisper, giving it also enables verbatim filler priming, which needs to know the language up front.",
     )
     ap.add_argument(
         "--num-speakers",
@@ -272,6 +275,15 @@ def main() -> None:
         default=None,
         help="Comma-separated names or domain terms to bias recognition toward. "
              "Supported by vibevoice and elevenlabs (billed +20%% on elevenlabs).",
+    )
+    ap.add_argument(
+        "--initial-prompt",
+        type=str,
+        default=None,
+        help="Override the decoder priming text (mlx-whisper only). By default, and "
+             "only when --language is given, the decoder is primed for disfluencies "
+             "so fillers survive (Hard Rule 8). Pass an empty string to get "
+             "Whisper's cleaned-up speech instead.",
     )
     ap.add_argument(
         "--audio-track",
@@ -300,6 +312,7 @@ def main() -> None:
         audio_track=args.audio_track,
         engine=args.engine,
         hotwords=hotwords,
+        initial_prompt=args.initial_prompt,
     )
 
 
