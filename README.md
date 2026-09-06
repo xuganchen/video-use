@@ -6,13 +6,25 @@
 
 Introducing **video-use** — edit videos with Claude Code. 100% open source.
 
+> **This is a fork.** Upstream is [browser-use/video-use](https://github.com/browser-use/video-use);
+> this copy tracks its `main` and changes three things:
+>
+> - **Transcription runs locally.** Default engine is `mlx-whisper` (Whisper large-v3 on the
+>   Apple Silicon GPU) — no API key, no per-minute cost. `--engine elevenlabs` still works,
+>   `--engine vibevoice` is new. Pass `--language` to keep fillers verbatim; Whisper deletes
+>   them silently otherwise.
+> - **Transcripts resolve by source, not by filename.** Each engine writes its own cache file
+>   and every consumer finds it, whichever one ran.
+> - **Captions work for CJK.** Chunk size adapts to the script and tokens join without spaces,
+>   so Chinese reads `平均的团队规模在` instead of `平 均`.
+
 Drop raw footage in a folder, chat with Claude Code, get `final.mp4` back. Works for any content — talking heads, montages, tutorials, travel, interviews — without presets or menus.
 
 Try video-use in [Browser Use Cloud](https://cloud.browser-use.com/v4?utm_campaign=video-use-use-in-cloud&utm_source=github).
 
 ## What it does
 
-- **Cuts out filler words** (`umm`, `uh`, false starts) and dead space between takes
+- **Cuts out filler words** (`umm`, `uh`, false starts) and dead space between takes — needs `--language` on mlx-whisper, which is what keeps the fillers in the transcript to cut
 - **Auto color grades** every segment (warm cinematic, neutral punch, or any custom ffmpeg chain)
 - **30ms audio fades** at every cut so you never hear a pop
 - **Burns subtitles** in your style — 2-word UPPERCASE chunks by default, fully customizable
@@ -25,12 +37,12 @@ Try video-use in [Browser Use Cloud](https://cloud.browser-use.com/v4?utm_campai
 Paste into Claude Code, Codex, Hermes, Openclaw, or any agent with shell access:
 
 ```text
-Set up https://github.com/browser-use/video-use for me.
+Set up https://github.com/xuganchen/video-use for me.
 
-Read install.md first to install this repo, wire up ffmpeg, register the skill with whichever agent you're running under, and set up the ElevenLabs API key — ask me to paste it when you need it. Then read SKILL.md for daily usage, and always read helpers/ because that's where the editing scripts live. After install, don't transcribe anything on your own — just tell me it's ready and wait for me to drop footage into a folder.
+Read install.md first to install this repo, wire up ffmpeg, register the skill with whichever agent you're running under, and install mlx-whisper for local transcription. Then read SKILL.md for daily usage, and always read helpers/ because that's where the editing scripts live. After install, don't transcribe anything on your own — just tell me it's ready and wait for me to drop footage into a folder.
 ```
 
-The agent handles the clone, dependencies, skill registration, and prompts you once for your ElevenLabs API key (grab one at [elevenlabs.io/app/settings/api-keys](https://elevenlabs.io/app/settings/api-keys)).
+The agent handles the clone, dependencies, and skill registration. No API key is needed — transcription runs locally. For the hosted engine, put an [ElevenLabs key](https://elevenlabs.io/app/settings/api-keys) in `.env` and pass `--engine elevenlabs`.
 
 Then point your agent at a folder of raw takes:
 
@@ -53,7 +65,7 @@ If you'd rather do it by hand:
 
 ```bash
 # 1. Clone and symlink into your agent's skills directory
-git clone https://github.com/browser-use/video-use ~/Developer/video-use
+git clone https://github.com/xuganchen/video-use ~/Developer/video-use
 ln -sfn ~/Developer/video-use ~/.claude/skills/video-use        # Claude Code
 # ln -sfn ~/Developer/video-use ~/.codex/skills/video-use       # Codex
 
@@ -63,7 +75,10 @@ uv sync                         # or: pip install -e .
 brew install ffmpeg             # required
 brew install yt-dlp             # optional, for downloading online sources
 
-# 3. Add your ElevenLabs API key
+# 3. Install the default transcription engine (Apple Silicon)
+pip install mlx-whisper         # or: pip install -e '.[mlx]'
+
+# 4. Optional — hosted engine, only for --engine elevenlabs
 cp .env.example .env
 $EDITOR .env                    # ELEVENLABS_API_KEY=...
 ```
@@ -76,7 +91,7 @@ The LLM never watches the video. It **reads** it — through two layers that tog
   <img src="static/timeline-view.svg" alt="timeline_view composite — filmstrip + speaker track + waveform + word labels + silence-gap cut candidates" width="100%">
 </p>
 
-**Layer 1 — Audio transcript (always loaded).** One ElevenLabs Scribe call per source gives word-level timestamps, speaker diarization, and audio events (`(laughter)`, `(applause)`, `(sigh)`). All takes pack into a single ~12KB `takes_packed.md` — the LLM's primary reading view.
+**Layer 1 — Audio transcript (always loaded).** One transcription pass per source gives word-level timestamps. The local default stops there; `--engine elevenlabs` adds speaker diarization and audio events (`(laughter)`, `(applause)`, `(sigh)`). All takes pack into a single ~12KB `takes_packed.md` — the LLM's primary reading view.
 
 ```
 ## C0103  (duration: 43.0s, 8 phrases)
