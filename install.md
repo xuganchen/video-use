@@ -1,6 +1,6 @@
 ---
 name: video-use-install
-description: Install video-use into the current agent (Claude Code, Codex, Hermes, Openclaw, etc.) and wire up ffmpeg + the ElevenLabs API key so the user can start editing immediately.
+description: Install video-use into the current agent (Claude Code, Codex, Hermes, Openclaw, etc.) and wire up ffmpeg and a transcription engine so the user can start editing immediately.
 ---
 
 # video-use install
@@ -15,7 +15,7 @@ Three things must exist on this machine:
 
 1. The `video-use` repo cloned somewhere stable.
 2. `ffmpeg` on `$PATH` (plus optional `yt-dlp` for online sources).
-3. An ElevenLabs API key in `.env` at the repo root (for Scribe transcription).
+3. A transcription engine. Default `mlx-whisper` is local and free: `pip install mlx-whisper` (Apple Silicon). An ElevenLabs API key in `.env` at the repo root is needed only for `--engine elevenlabs`.
 
 And one thing must be true about the current agent:
 
@@ -23,7 +23,7 @@ And one thing must be true about the current agent:
 
 ## Install prompt contract
 
-- Do everything yourself. Only ask the user for things you cannot generate — the ElevenLabs API key, and confirmation before `brew install`.
+- Do everything yourself. Only ask the user for things you cannot generate — an ElevenLabs API key if they want that engine, and confirmation before `brew install`.
 - Prefer a stable clone path like `~/Developer/video-use` (not `/tmp`, not `~/Downloads`).
 - The skill references helpers by bare name (`transcribe.py`, `render.py`). That works because SKILL.md and `helpers/` ship together — keep them as siblings when you register the skill.
 - After install, verify by running one real command against one real file. Don't declare success on file-existence checks alone.
@@ -89,9 +89,18 @@ Figure out which agent you are running under, and register once. A symlink of th
 
 If you can't tell which agent you're in, ask the user once: "which agent am I running under — Claude Code, Codex, or something else?" Then pick the right target.
 
-### 5. ElevenLabs API key
+### 5. Transcription engine
 
-Scribe (ElevenLabs) does all transcription. Without a key, nothing transcribes.
+The default engine is `mlx-whisper`: local, free, word-level, runs on the Apple
+Silicon GPU. Install it and transcription works:
+
+```bash
+pip install mlx-whisper      # or: pip install -e '.[mlx]'
+```
+
+The rest of this section is only for `--engine elevenlabs` (hosted, paid, and the
+only engine that tags audio events like (laughs) or diarizes speakers). Skip it
+unless the user asks for that engine.
 
 1. Check existing state in this order and stop at the first hit:
 
