@@ -131,7 +131,9 @@ def pack_one_file(json_path: Path, silence_threshold: float) -> tuple[str, float
         duration = phrases[-1]["end"] - phrases[0]["start"]
     else:
         duration = 0.0
-    return json_path.stem, duration, phrases
+    from transcribe import source_stem_from_transcript
+
+    return source_stem_from_transcript(json_path), duration, phrases
 
 
 def render_markdown(entries: list[tuple[str, float, list[dict]]], silence_threshold: float) -> str:

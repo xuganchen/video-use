@@ -423,7 +423,8 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
     - UPPERCASE text
     - Output times computed as word.start - segment_start + segment_offset
     """
-    transcripts_dir = edit_dir / "transcripts"
+    from transcribe import find_transcript  # sibling module; see pack_transcripts
+
     sources = edl["sources"]
 
     entries: list[tuple[float, float, str]] = []
@@ -435,8 +436,8 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
         seg_end = float(r["end"])
         seg_duration = seg_end - seg_start
 
-        tr_path = transcripts_dir / f"{src_name}.json"
-        if not tr_path.exists():
+        tr_path = find_transcript(edit_dir, src_name)
+        if tr_path is None:
             print(f"  no transcript for {src_name}, skipping captions for this segment")
             seg_offset += seg_duration
             continue
