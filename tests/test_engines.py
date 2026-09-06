@@ -15,7 +15,11 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).parents[1] / "helpers"))
 
 import engines  # noqa: E402
-from transcribe import transcript_path  # noqa: E402
+from transcribe import (  # noqa: E402
+    find_transcript,
+    source_stem_from_transcript,
+    transcript_path,
+)
 
 
 def silent_wav(path: Path, seconds: float = 2.0, rate: int = 16000) -> Path:
@@ -151,6 +155,56 @@ class ContractTests(unittest.TestCase):
             wav = silent_wav(Path(d) / "a.wav")
             with self.assertRaises(RuntimeError):
                 engines.transcribe_audio("elevenlabs", wav, api_key=None)
+
+
+class FindTranscriptTests(unittest.TestCase):
+    """Consumers know the EDL source key, not the filename the engine wrote.
+
+    Hard-coding `<source>.json` is how --build-subtitles produced a 0-byte
+    master.srt and took ffmpeg down with it (exit 183).
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.edit = Path(self.tmp.name)
+        (self.edit / "transcripts").mkdir()
+
+    def write(self, name: str) -> Path:
+        p = self.edit / "transcripts" / name
+        p.write_text("{}")
+        return p
+
+    def test_finds_an_engine_suffixed_transcript(self):
+        # The regression: only mlx-whisper ran, so `talk.json` never existed.
+        want = self.write("talk.mlx-whisper.json")
+        self.assertEqual(find_transcript(self.edit, "talk"), want)
+
+    def test_prefers_the_requested_engine(self):
+        self.write("talk.json")
+        want = self.write("talk.mlx-whisper.json")
+        self.assertEqual(find_transcript(self.edit, "talk", "mlx-whisper"), want)
+
+    def test_legacy_plain_name_still_resolves(self):
+        want = self.write("talk.json")
+        self.assertEqual(find_transcript(self.edit, "talk"), want)
+
+    def test_missing_transcript_is_none_not_a_bogus_path(self):
+        self.assertIsNone(find_transcript(self.edit, "talk"))
+
+    def test_does_not_match_a_different_source(self):
+        self.write("other.mlx-whisper.json")
+        self.assertIsNone(find_transcript(self.edit, "talk"))
+
+    def test_round_trips_every_transcript_path(self):
+        video = Path("/src/DJI_0001.MP4")
+        for engine in engines.ENGINES:
+            for track in (0, 1):
+                p = transcript_path(self.edit, video, track, engine)
+                self.assertEqual(
+                    source_stem_from_transcript(p), "DJI_0001",
+                    f"{engine} track{track} -> {p.name}",
+                )
 
 
 if __name__ == "__main__":

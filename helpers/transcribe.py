@@ -112,6 +112,53 @@ def transcript_path(
     return edit_dir / "transcripts" / f"{video.stem}{suffix}.json"
 
 
+def source_stem_from_transcript(path: Path) -> str:
+    """Recover the EDL source key from a transcript filename.
+
+    Inverse of transcript_path: strips the .trackN and .<engine> suffixes.
+    """
+    import re
+
+    stem = path.name[:-5] if path.name.endswith(".json") else path.stem
+    for eng in engines.ENGINES:
+        if stem.endswith(f".{eng}"):
+            stem = stem[: -len(eng) - 1]
+            break
+    return re.sub(r"\.track\d+$", "", stem)
+
+
+def find_transcript(
+    edit_dir: Path,
+    source: str,
+    engine: str | None = None,
+    audio_track: int = 0,
+) -> Path | None:
+    """Locate a source's transcript whichever engine produced it.
+
+    Consumers (SRT builder, timeline_view, Studio) know only the EDL source key,
+    but transcript_path writes <stem>[.trackN][.engine].json. Hard-coding the
+    plain name silently finds nothing: that is how --build-subtitles produced a
+    0-byte master.srt and took ffmpeg down with it. Prefer the requested engine,
+    then the legacy plain name, then the most recent of whatever exists.
+    """
+    d = edit_dir / "transcripts"
+    if engine:
+        p = transcript_path(edit_dir, Path(source), audio_track, engine)
+        if p.exists():
+            return p
+    exact = d / f"{source}.json"
+    if exact.exists():
+        return exact
+    if not d.is_dir():
+        return None
+    cands = sorted(
+        (c for c in d.glob(f"{source}.*.json") if not c.name.startswith(".")),
+        key=lambda c: c.stat().st_mtime,
+        reverse=True,
+    )
+    return cands[0] if cands else None
+
+
 def transcribe_one(
     video: Path,
     edit_dir: Path,

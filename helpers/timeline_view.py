@@ -368,9 +368,8 @@ def main() -> None:
     # Auto-resolve transcript if not given
     transcript = args.transcript
     if transcript is None:
-        auto = video.parent / "edit" / "transcripts" / f"{video.stem}.json"
-        if auto.exists():
-            transcript = auto
+        from transcribe import find_transcript
+        transcript = find_transcript(video.parent / "edit", video.stem)
 
     out_path = args.output
     if out_path is None:
