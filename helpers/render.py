@@ -656,6 +656,7 @@ def build_final_composite(
     subtitles_path: Path | None,
     out_path: Path,
     edit_dir: Path,
+    sub_style: str = SUB_FORCE_STYLE,
 ) -> None:
     """Final pass: base → overlays (PTS-shifted) → subtitles LAST → out.
 
@@ -696,7 +697,7 @@ def build_final_composite(
     if has_subs:
         subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
         filter_parts.append(
-            f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
+            f"{current}subtitles='{subs_abs}':force_style='{sub_style}'[outv]"
         )
         out_label = "[outv]"
     else:
@@ -805,13 +806,17 @@ def main() -> None:
 
     # 4. Composite (overlays + subtitles LAST) → intermediate (pre-loudnorm) path
     overlays = edl.get("overlays") or []
+    # EDL may override the burned-in caption style (font, size, margin).
+    # Needed for non-Latin scripts: the default FontName cannot render CJK,
+    # and MarginV=90 is a vertical-video safe-zone value, too high for 16:9.
+    sub_style = edl.get("subtitle_style") or SUB_FORCE_STYLE
     if args.no_loudnorm:
         # Composite directly to final output
-        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir)
+        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir, sub_style)
     else:
         # Composite to a temp file, then run loudnorm → final output
         tmp_composite = out_path.with_suffix(".prenorm.mp4")
-        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
+        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir, sub_style)
         print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
         apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
         tmp_composite.unlink(missing_ok=True)
