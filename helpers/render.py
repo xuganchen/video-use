@@ -429,7 +429,7 @@ def _is_cjk(text: str) -> bool:
     return any(lo <= c <= hi for c in text for lo, hi in _CJK_RANGES)
 
 
-def join_tokens(tokens: list[str]) -> str:
+def join_tokens(tokens: list[str], fuse_latin: bool = False) -> str:
     """Join caption tokens for display.
 
     English needs the spaces. Chinese, Japanese and Korean do not use them, and
@@ -442,10 +442,31 @@ def join_tokens(tokens: list[str]) -> str:
     out = ""
     for tok in (t for t in tokens if t):
         cjk_run = out and _is_cjk(out[-1]) and _is_cjk(tok[0])
-        if out and not cjk_run and tok[0] not in no_space_before:
+        # Chinese ASR splits embedded Latin across tokens — "MIT" arrives as
+        # "M" + "IT" and joins to "M IT". Welding adjacent ASCII alphanumerics
+        # fixes that, but it would also weld English words into "ninetypercent",
+        # so it is opt-in and only the CJK path asks for it.
+        latin_run = (
+            fuse_latin and out
+            and out[-1].isascii() and out[-1].isalnum()
+            and tok[0].isascii() and tok[0].isalnum()
+        )
+        if out and not cjk_run and not latin_run and tok[0] not in no_space_before:
             out += " "
         out += tok
     return out
+
+
+def _sample_tokens(words: list[dict]) -> list[str]:
+    return [s for s in ((w.get("text") or "").strip() for w in words[:200]) if s]
+
+
+def majority_cjk(words: list[dict]) -> bool:
+    """True when at least half the sampled tokens are CJK."""
+    sample = _sample_tokens(words)
+    if not sample:
+        return False
+    return sum(1 for s in sample if _is_cjk(s)) >= len(sample) * 0.5
 
 
 def auto_chunk_words(words: list[dict]) -> int:
@@ -455,16 +476,129 @@ def auto_chunk_words(words: list[dict]) -> int:
     so 2 there means a two-character caption — the burned-in result reads
     "的 使" and is useless. Chunk far more of them per line.
     """
-    sample = [(w.get("text") or "").strip() for w in words[:200]]
-    sample = [s for s in sample if s]
-    if not sample:
-        return 2
-    cjk = sum(1 for s in sample if _is_cjk(s))
-    if cjk < len(sample) * 0.5:
+    sample = _sample_tokens(words)
+    if not sample or not majority_cjk(words):
         return 2
     # Aim at roughly 10 CJK glyphs per caption, whatever the token size.
     avg = max(1.0, sum(len(s) for s in sample) / len(sample))
     return max(2, round(10 / avg))
+
+
+# -------- CJK cue building ---------------------------------------------------
+#
+# auto_chunk_words above counts tokens, and a fixed count still lands mid-word:
+# Chinese ASR emits one token per Han character and nothing in the transcript
+# says where a word ends, so a 8-token cue splits "...报出来的结" / "果是". This
+# path breaks on punctuation and speech gaps instead, and never inside a word.
+# Proven on a 50-minute Mandarin talk (videos/demo_cn).
+
+CUE_MAX_WIDTH = 30.0     # glyph budget per cue (CJK 1.0, Latin 0.5)
+CUE_MIN_SOFT = 7.0       # never break on a comma shorter than this
+CUE_GAP_BREAK = 0.35     # a pause this long ends a cue
+CUE_MIN_DUR = 0.75       # readable floor
+_HARD_BREAK = "。！？.!?"
+_SOFT_BREAK = "，、；：,;:"
+_FULLWIDTH = ((",", "，"), (".", "。"), ("!", "！"), ("?", "？"), (";", "；"), (":", "："))
+_CJK_CLASS = r"⺀-￿"
+
+
+def glyph_width(text: str) -> float:
+    """Screen width in CJK glyph units; Latin is about half as wide."""
+    return sum(1.0 if ord(c) > 0x2E80 else 0.5 for c in text)
+
+
+def fullwidth_punct(text: str) -> str:
+    """ASR punctuates Chinese with ASCII marks; widen them and close the gap."""
+    for ascii_mark, full in _FULLWIDTH:
+        text = re.sub(rf"(?<=[{_CJK_CLASS}])\s*{re.escape(ascii_mark)}\s*", full, text)
+    return re.sub(r"\s{2,}", " ", text).strip().strip(_SOFT_BREAK)
+
+
+def word_boundaries(text: str) -> set[int] | None:
+    """Character offsets that fall between Chinese words, None without jieba.
+
+    Optional on purpose: without jieba we still break on punctuation and
+    pauses, we just cannot protect the inside of one long unpunctuated run.
+    """
+    try:
+        import jieba
+    except ImportError:
+        return None
+    out, pos = set(), 0
+    for tok in jieba.cut(text):
+        pos += len(tok)
+        out.add(pos)
+    return out
+
+
+def split_at_widest_gap(words: list[dict]) -> int:
+    """Index to end the first cue on, for a run with no punctuation to break at.
+
+    Two constraints. The cut must land on a word boundary, or the screen reads
+    "传统的护城 / 河品牌". Among the legal points take the widest speech gap:
+    the speaker still micro-pauses between phrases without punctuating them.
+    """
+    texts = [(w.get("text") or "").strip() for w in words]
+    legal = word_boundaries("".join(texts))
+
+    offsets, run_chars = [], 0
+    for s in texts:
+        run_chars += len(s)
+        offsets.append(run_chars)
+
+    best, best_gap = None, -1.0
+    run = 0.0
+    for j in range(len(words) - 1):
+        run += glyph_width(texts[j])
+        if run < CUE_MAX_WIDTH * 0.45:
+            continue
+        if legal is not None and offsets[j] not in legal:
+            continue
+        gap = float(words[j + 1].get("start", 0.0)) - float(words[j].get("end", 0.0))
+        # >= so ties resolve to the latest legal point, filling the line.
+        if gap >= best_gap:
+            best, best_gap = j, gap
+    return best if best is not None else max(0, len(words) - 2)
+
+
+def cjk_cues(
+    words: list[dict], seg_start: float, seg_end: float, offset: float
+) -> list[list]:
+    """Cues for one EDL range, timed on the output timeline."""
+    out: list[list] = []
+    current: list[dict] = []
+
+    def flush(chunk: list[dict]) -> None:
+        if not chunk:
+            return
+        text = fullwidth_punct(
+            join_tokens([(w.get("text") or "").strip() for w in chunk], fuse_latin=True)
+        )
+        if not text:
+            return
+        a = max(seg_start, float(chunk[0].get("start", seg_start))) - seg_start + offset
+        b = min(seg_end, float(chunk[-1].get("end", seg_end))) - seg_start + offset
+        out.append([a, max(b, a + 0.2), text])
+
+    for i, w in enumerate(words):
+        current.append(w)
+        run = "".join((x.get("text") or "").strip() for x in current)
+        nxt = words[i + 1] if i + 1 < len(words) else None
+        gap = (float(nxt.get("start", 0.0)) - float(w.get("end", 0.0))) if nxt else 99.0
+        last = ((w.get("text") or "").strip() or " ")[-1]
+
+        if (nxt is None
+                or last in _HARD_BREAK
+                or (last in _SOFT_BREAK and glyph_width(run) >= CUE_MIN_SOFT)
+                or (gap >= CUE_GAP_BREAK and glyph_width(run) >= 4)):
+            flush(current)
+            current = []
+        elif glyph_width(run) >= CUE_MAX_WIDTH:
+            k = split_at_widest_gap(current)
+            flush(current[: k + 1])
+            current = current[k + 1:]
+    flush(current)
+    return out
 
 
 def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
@@ -480,6 +614,7 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
 
     entries: list[tuple[float, float, str]] = []
     seg_offset = 0.0
+    cjk_used = False
 
     for r in edl["ranges"]:
         src_name = r["source"]
@@ -495,6 +630,14 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
 
         transcript = json.loads(tr_path.read_text())
         words_in_seg = _words_in_range(transcript, seg_start, seg_end)
+
+        if majority_cjk(words_in_seg):
+            cjk_used = True
+            entries.extend(
+                tuple(c) for c in cjk_cues(words_in_seg, seg_start, seg_end, seg_offset)
+            )
+            seg_offset += seg_duration
+            continue
 
         # Group into chunks, break on punctuation
         chunk_size = auto_chunk_words(words_in_seg)
@@ -531,6 +674,16 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
 
     # Sort and write as SRT
     entries.sort(key=lambda e: e[0])
+
+    if cjk_used:
+        # Readable floor, without running into the next cue.
+        floored: list[tuple[float, float, str]] = []
+        for i, (a, b, txt) in enumerate(entries):
+            if b - a < CUE_MIN_DUR:
+                cap = entries[i + 1][0] - 0.04 if i + 1 < len(entries) else a + CUE_MIN_DUR
+                b = max(b, min(a + CUE_MIN_DUR, cap))
+            floored.append((a, b, txt))
+        entries = floored
     lines: list[str] = []
     for i, (a, b, t) in enumerate(entries, start=1):
         lines.append(str(i))
@@ -656,6 +809,7 @@ def build_final_composite(
     subtitles_path: Path | None,
     out_path: Path,
     edit_dir: Path,
+    sub_style: str = SUB_FORCE_STYLE,
 ) -> None:
     """Final pass: base → overlays (PTS-shifted) → subtitles LAST → out.
 
@@ -696,7 +850,7 @@ def build_final_composite(
     if has_subs:
         subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
         filter_parts.append(
-            f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
+            f"{current}subtitles='{subs_abs}':force_style='{sub_style}'[outv]"
         )
         out_label = "[outv]"
     else:
@@ -805,13 +959,17 @@ def main() -> None:
 
     # 4. Composite (overlays + subtitles LAST) → intermediate (pre-loudnorm) path
     overlays = edl.get("overlays") or []
+    # EDL may override the burned-in caption style (font, size, margin).
+    # Needed for non-Latin scripts: the default FontName cannot render CJK,
+    # and MarginV=90 is a vertical-video safe-zone value, too high for 16:9.
+    sub_style = edl.get("subtitle_style") or SUB_FORCE_STYLE
     if args.no_loudnorm:
         # Composite directly to final output
-        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir)
+        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir, sub_style)
     else:
         # Composite to a temp file, then run loudnorm → final output
         tmp_composite = out_path.with_suffix(".prenorm.mp4")
-        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
+        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir, sub_style)
         print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
         apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
         tmp_composite.unlink(missing_ok=True)

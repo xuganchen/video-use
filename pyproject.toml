@@ -16,6 +16,8 @@ dependencies = [
 animations = ["manim"]
 # Default transcription engine. Apple Silicon only, so it cannot be a hard dep.
 mlx = ["mlx-whisper>=0.4"]
+# Chinese word segmentation, so captions never break inside a word.
+cjk = ["jieba"]
 
 [build-system]
 requires = ["setuptools>=61.0"]

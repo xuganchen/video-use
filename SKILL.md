@@ -282,11 +282,14 @@ Match the source unless the user asked for something specific. Common targets: `
     {"file": "edit/animations/slot_1/render.mp4", "start_in_output": 0.0, "duration": 5.0}
   ],
   "subtitles": "edit/master.srt",
+  "subtitle_style": "FontName=Heiti SC,FontSize=13,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&HC0000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=25",
   "total_duration_s": 87.4
 }
 ```
 
 `grade` is a preset name or raw ffmpeg filter. `overlays` are rendered animation clips. `subtitles` is optional and applied LAST.
+
+`subtitle_style` is an optional raw ASS `force_style` string replacing the shipped default. **Set it for any non-Latin script** — the default `FontName=Helvetica` cannot render CJK and burns tofu boxes. `Heiti SC` and `Hiragino Sans GB` both work on macOS; PingFang does not, fontconfig cannot see it. The default `MarginV=90` is a vertical-video safe zone and sits too high on 16:9, so drop it to ~25 there.
 
 ## Memory — `project.md`
 
