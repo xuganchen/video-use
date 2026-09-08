@@ -15,8 +15,10 @@ Introducing **video-use** — edit videos with Claude Code. 100% open source.
 >   them silently otherwise.
 > - **Transcripts resolve by source, not by filename.** Each engine writes its own cache file
 >   and every consumer finds it, whichever one ran.
-> - **Captions work for CJK.** Chunk size adapts to the script and tokens join without spaces,
->   so Chinese reads `平均的团队规模在` instead of `平 均`.
+> - **Captions work for CJK.** Chinese cues break on punctuation, speech gaps and jieba word
+>   boundaries rather than a token count, so a line never splits mid-word and reads
+>   `95% 的使用了 AI 的公司。` instead of `平 均`. Set `subtitle_style` in the EDL to a font
+>   that can render it. English is untouched.
 
 Drop raw footage in a folder, chat with Claude Code, get `final.mp4` back. Works for any content — talking heads, montages, tutorials, travel, interviews — without presets or menus.
 
